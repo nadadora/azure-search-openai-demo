@@ -1,4 +1,4 @@
-targetScope = 'subscription'
+targetScope = 'resourceGroup'
 
 @minLength(1)
 @maxLength(64)
@@ -9,88 +9,65 @@ param environmentName string
 @description('Primary location for all resources')
 param location string
 
+/*
+  Setting these in main.parameters.json doesnt work for me, so declaring resources here
+  If reusing existing resources, use that to populate the <resource>Name fields. 
+  Otherwise set to empty string and set create variables to true.
+*/
+param resourceGroupName string = 'sziel'
 param appServicePlanName string = ''
 param backendServiceName string = ''
-param resourceGroupName string = ''
 
-param applicationInsightsName string = ''
+// Cognitive Search Service
+@description('True if new Search resource should be created otherwise provide name of existing resource to use')
+param createSearchService bool = false
 
-param searchServiceName string = ''
-param searchServiceResourceGroupName string = ''
+param searchIndexName string = 'gptkbindex'
+param searchServiceName string = 'sz-gptkb'
 param searchServiceResourceGroupLocation string = location
-
 param searchServiceSkuName string = 'standard'
-param searchIndexName string // Set in main.parameters.json
 
-param storageAccountName string = ''
-param storageResourceGroupName string = ''
+// Azure Blob Storage 
+@description('True if new Storage resource should be created otherwise provide name of existing resource to use')
+param createStorageAccount bool = false
+
+param storageAccountName string = 'stmhpisjhqnkrxq'
 param storageResourceGroupLocation string = location
-param storageContainerName string = 'content'
+param storageContainerName string = 'proposal-content'
 
-param openAiServiceName string = ''
-param openAiResourceGroupName string = ''
-@description('Location for the OpenAI resource group')
-@allowed(['canadaeast', 'eastus', 'francecentral', 'japaneast', 'northcentralus'])
-@metadata({
-  azd: {
-    type: 'location'
-  }
-})
-param openAiResourceGroupLocation string
+// Form Recognizer
+@description('To determine if creating form recognizer resource is needed')
+param createFormRecognizer bool = false
 
-param openAiSkuName string = 'S0'
-
-param formRecognizerServiceName string = ''
-param formRecognizerResourceGroupName string = ''
+param formRecognizerServiceName string = 'cog-fr-mhpisjhqnkrxq'
 param formRecognizerResourceGroupLocation string = location
-
 param formRecognizerSkuName string = 'S0'
 
-param chatGptDeploymentName string // Set in main.parameters.json
-param chatGptDeploymentCapacity int = 30
+// Azure OpenAI 
 param chatGptModelName string = 'gpt-35-turbo'
-param chatGptModelVersion string = '0613'
-param embeddingDeploymentName string = 'embedding'
-param embeddingDeploymentCapacity int = 30
-param embeddingModelName string = 'text-embedding-ada-002'
+param openAiServiceName string = 'sz-aoai'
+param chatGptDeploymentName string = 'sz-aoai-gpt35t'
+param embeddingDeploymentName string = 'sz-embedding'
 
+// Misc 
 @description('Id of the user or app to assign application roles')
 param principalId string = ''
 
 @description('Use Application Insights for monitoring and performance tracing')
 param useApplicationInsights bool = false
+param applicationInsightsName string = ''
 
 var abbrs = loadJsonContent('abbreviations.json')
 var resourceToken = toLower(uniqueString(subscription().id, environmentName, location))
 var tags = { 'azd-env-name': environmentName }
 
-// Organize resources in a resource group
-resource resourceGroup 'Microsoft.Resources/resourceGroups@2021-04-01' = {
-  name: !empty(resourceGroupName) ? resourceGroupName : '${abbrs.resourcesResourceGroups}${environmentName}'
-  location: location
-  tags: tags
-}
-
-resource openAiResourceGroup 'Microsoft.Resources/resourceGroups@2021-04-01' existing = if (!empty(openAiResourceGroupName)) {
-  name: !empty(openAiResourceGroupName) ? openAiResourceGroupName : resourceGroup.name
-}
-
-resource formRecognizerResourceGroup 'Microsoft.Resources/resourceGroups@2021-04-01' existing = if (!empty(formRecognizerResourceGroupName)) {
-  name: !empty(formRecognizerResourceGroupName) ? formRecognizerResourceGroupName : resourceGroup.name
-}
-
-resource searchServiceResourceGroup 'Microsoft.Resources/resourceGroups@2021-04-01' existing = if (!empty(searchServiceResourceGroupName)) {
-  name: !empty(searchServiceResourceGroupName) ? searchServiceResourceGroupName : resourceGroup.name
-}
-
-resource storageResourceGroup 'Microsoft.Resources/resourceGroups@2021-04-01' existing = if (!empty(storageResourceGroupName)) {
-  name: !empty(storageResourceGroupName) ? storageResourceGroupName : resourceGroup.name
-}
+/* 
+  Resource creation
+*/
 
 // Monitor application with Azure Monitor
 module monitoring './core/monitor/monitoring.bicep' = if (useApplicationInsights) {
   name: 'monitoring'
-  scope: resourceGroup
   params: {
     location: location
     tags: tags
@@ -101,7 +78,6 @@ module monitoring './core/monitor/monitoring.bicep' = if (useApplicationInsights
 // Create an App Service Plan to group applications under the same payment plan and SKU
 module appServicePlan 'core/host/appserviceplan.bicep' = {
   name: 'appserviceplan'
-  scope: resourceGroup
   params: {
     name: !empty(appServicePlanName) ? appServicePlanName : '${abbrs.webServerFarms}${resourceToken}'
     location: location
@@ -117,7 +93,6 @@ module appServicePlan 'core/host/appserviceplan.bicep' = {
 // The application frontend
 module backend 'core/host/appservice.bicep' = {
   name: 'web'
-  scope: resourceGroup
   params: {
     name: !empty(backendServiceName) ? backendServiceName : '${abbrs.webSitesAppService}backend-${resourceToken}'
     location: location
@@ -129,11 +104,11 @@ module backend 'core/host/appservice.bicep' = {
     scmDoBuildDuringDeployment: true
     managedIdentity: true
     appSettings: {
-      AZURE_STORAGE_ACCOUNT: storage.outputs.name
+      AZURE_STORAGE_ACCOUNT: !empty(storageAccountName) ? storageAccountName : storage.outputs.name
       AZURE_STORAGE_CONTAINER: storageContainerName
-      AZURE_OPENAI_SERVICE: openAi.outputs.name
+      AZURE_OPENAI_SERVICE: openAiServiceName
       AZURE_SEARCH_INDEX: searchIndexName
-      AZURE_SEARCH_SERVICE: searchService.outputs.name
+      AZURE_SEARCH_SERVICE: !empty(searchServiceName) ? searchServiceName : searchService.outputs.name
       AZURE_OPENAI_CHATGPT_DEPLOYMENT: chatGptDeploymentName
       AZURE_OPENAI_CHATGPT_MODEL: chatGptModelName
       AZURE_OPENAI_EMB_DEPLOYMENT: embeddingDeploymentName
@@ -142,45 +117,9 @@ module backend 'core/host/appservice.bicep' = {
   }
 }
 
-module openAi 'core/ai/cognitiveservices.bicep' = {
-  name: 'openai'
-  scope: openAiResourceGroup
-  params: {
-    name: !empty(openAiServiceName) ? openAiServiceName : '${abbrs.cognitiveServicesAccounts}${resourceToken}'
-    location: openAiResourceGroupLocation
-    tags: tags
-    sku: {
-      name: openAiSkuName
-    }
-    deployments: [
-      {
-        name: chatGptDeploymentName
-        model: {
-          format: 'OpenAI'
-          name: chatGptModelName
-          version: chatGptModelVersion
-        }
-        sku: {
-          name: 'Standard'
-          capacity: chatGptDeploymentCapacity
-        }
-      }
-      {
-        name: embeddingDeploymentName
-        model: {
-          format: 'OpenAI'
-          name: embeddingModelName
-          version: '2'
-        }
-        capacity: embeddingDeploymentCapacity
-      }
-    ]
-  }
-}
-
-module formRecognizer 'core/ai/cognitiveservices.bicep' = {
+// Note: if you're creating a FR, set restore: true in cognitiveservices.bicep if you deleted on previously. Otherwise comment out.
+module formRecognizer 'core/ai/cognitiveservices.bicep' = if (createFormRecognizer) {
   name: 'formrecognizer'
-  scope: formRecognizerResourceGroup
   params: {
     name: !empty(formRecognizerServiceName) ? formRecognizerServiceName : '${abbrs.cognitiveServicesFormRecognizer}${resourceToken}'
     kind: 'FormRecognizer'
@@ -192,9 +131,8 @@ module formRecognizer 'core/ai/cognitiveservices.bicep' = {
   }
 }
 
-module searchService 'core/search/search-services.bicep' = {
+module searchService 'core/search/search-services.bicep' = if (createSearchService) {
   name: 'search-service'
-  scope: searchServiceResourceGroup
   params: {
     name: !empty(searchServiceName) ? searchServiceName : 'gptkb-${resourceToken}'
     location: searchServiceResourceGroupLocation
@@ -211,9 +149,8 @@ module searchService 'core/search/search-services.bicep' = {
   }
 }
 
-module storage 'core/storage/storage-account.bicep' = {
+module storage 'core/storage/storage-account.bicep' = if (createStorageAccount) {
   name: 'storage'
-  scope: storageResourceGroup
   params: {
     name: !empty(storageAccountName) ? storageAccountName : '${abbrs.storageStorageAccounts}${resourceToken}'
     location: storageResourceGroupLocation
@@ -235,9 +172,12 @@ module storage 'core/storage/storage-account.bicep' = {
   }
 }
 
+/* 
+  Roles creation. TODO: find out more about this.
+*/
+
 // USER ROLES
 module openAiRoleUser 'core/security/role.bicep' = {
-  scope: openAiResourceGroup
   name: 'openai-role-user'
   params: {
     principalId: principalId
@@ -247,7 +187,6 @@ module openAiRoleUser 'core/security/role.bicep' = {
 }
 
 module formRecognizerRoleUser 'core/security/role.bicep' = {
-  scope: formRecognizerResourceGroup
   name: 'formrecognizer-role-user'
   params: {
     principalId: principalId
@@ -257,7 +196,6 @@ module formRecognizerRoleUser 'core/security/role.bicep' = {
 }
 
 module storageRoleUser 'core/security/role.bicep' = {
-  scope: storageResourceGroup
   name: 'storage-role-user'
   params: {
     principalId: principalId
@@ -267,7 +205,6 @@ module storageRoleUser 'core/security/role.bicep' = {
 }
 
 module storageContribRoleUser 'core/security/role.bicep' = {
-  scope: storageResourceGroup
   name: 'storage-contribrole-user'
   params: {
     principalId: principalId
@@ -277,7 +214,6 @@ module storageContribRoleUser 'core/security/role.bicep' = {
 }
 
 module searchRoleUser 'core/security/role.bicep' = {
-  scope: searchServiceResourceGroup
   name: 'search-role-user'
   params: {
     principalId: principalId
@@ -287,7 +223,6 @@ module searchRoleUser 'core/security/role.bicep' = {
 }
 
 module searchContribRoleUser 'core/security/role.bicep' = {
-  scope: searchServiceResourceGroup
   name: 'search-contrib-role-user'
   params: {
     principalId: principalId
@@ -297,7 +232,6 @@ module searchContribRoleUser 'core/security/role.bicep' = {
 }
 
 module searchSvcContribRoleUser 'core/security/role.bicep' = {
-  scope: searchServiceResourceGroup
   name: 'search-svccontrib-role-user'
   params: {
     principalId: principalId
@@ -308,7 +242,6 @@ module searchSvcContribRoleUser 'core/security/role.bicep' = {
 
 // SYSTEM IDENTITIES
 module openAiRoleBackend 'core/security/role.bicep' = {
-  scope: openAiResourceGroup
   name: 'openai-role-backend'
   params: {
     principalId: backend.outputs.identityPrincipalId
@@ -318,7 +251,6 @@ module openAiRoleBackend 'core/security/role.bicep' = {
 }
 
 module storageRoleBackend 'core/security/role.bicep' = {
-  scope: storageResourceGroup
   name: 'storage-role-backend'
   params: {
     principalId: backend.outputs.identityPrincipalId
@@ -328,7 +260,6 @@ module storageRoleBackend 'core/security/role.bicep' = {
 }
 
 module searchRoleBackend 'core/security/role.bicep' = {
-  scope: searchServiceResourceGroup
   name: 'search-role-backend'
   params: {
     principalId: backend.outputs.identityPrincipalId
@@ -337,25 +268,24 @@ module searchRoleBackend 'core/security/role.bicep' = {
   }
 }
 
+/*
+  Environment Variables
+*/
 output AZURE_LOCATION string = location
 output AZURE_TENANT_ID string = tenant().tenantId
-output AZURE_RESOURCE_GROUP string = resourceGroup.name
+output AZURE_RESOURCE_GROUP string = resourceGroupName
 
-output AZURE_OPENAI_SERVICE string = openAi.outputs.name
-output AZURE_OPENAI_RESOURCE_GROUP string = openAiResourceGroup.name
+output AZURE_OPENAI_SERVICE string = openAiServiceName
 output AZURE_OPENAI_CHATGPT_DEPLOYMENT string = chatGptDeploymentName
 output AZURE_OPENAI_CHATGPT_MODEL string = chatGptModelName
 output AZURE_OPENAI_EMB_DEPLOYMENT string = embeddingDeploymentName
 
-output AZURE_FORMRECOGNIZER_SERVICE string = formRecognizer.outputs.name
-output AZURE_FORMRECOGNIZER_RESOURCE_GROUP string = formRecognizerResourceGroup.name
+output AZURE_FORMRECOGNIZER_SERVICE string = !empty(formRecognizerServiceName) ? formRecognizerServiceName : formRecognizer.outputs.name
 
 output AZURE_SEARCH_INDEX string = searchIndexName
-output AZURE_SEARCH_SERVICE string = searchService.outputs.name
-output AZURE_SEARCH_SERVICE_RESOURCE_GROUP string = searchServiceResourceGroup.name
+output AZURE_SEARCH_SERVICE string = !empty(searchServiceName) ? searchServiceName : searchService.outputs.name
 
-output AZURE_STORAGE_ACCOUNT string = storage.outputs.name
+output AZURE_STORAGE_ACCOUNT string = !empty(storageAccountName) ? storageAccountName : storage.outputs.name
 output AZURE_STORAGE_CONTAINER string = storageContainerName
-output AZURE_STORAGE_RESOURCE_GROUP string = storageResourceGroup.name
 
 output BACKEND_URI string = backend.outputs.uri
