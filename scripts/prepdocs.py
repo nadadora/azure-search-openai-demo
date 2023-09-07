@@ -346,7 +346,7 @@ if __name__ == "__main__":
     azd_credential = AzureDeveloperCliCredential() if args.tenantid is None else AzureDeveloperCliCredential(tenant_id=args.tenantid, process_timeout=60)
     default_creds = azd_credential if args.searchkey is None or args.storagekey is None else None
     search_creds = default_creds if args.searchkey is None else AzureKeyCredential(args.searchkey)
-    use_vectors = not args.novectors
+    use_vectors = False # not args.novectors
 
     if not args.skipblobs:
         storage_creds = default_creds if args.storagekey is None else args.storagekey
